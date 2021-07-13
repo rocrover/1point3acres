@@ -3,14 +3,17 @@ import urllib.parse
 import re
 from PIL import Image
 from process_gif import get_code_from_gif
+from cfproxy import CFProxy
 import xml.dom.minidom as xml
 import lxml.html as html
 import questions
 from sys import exit
 import os
-import cfscrape
+import get_cf_clearance
 
-user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:72.0) Gecko/20100101 Firefox/72.0"
+# user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:72.0) Gecko/20100101 Firefox/72.0"
+user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+
 referer = "https://www.1point3acres.com/bbs/"
 
 get_login_url = "https://www.1point3acres.com/bbs/member.php?mod=logging&action=login&infloat=yes&handlekey=login&inajax=1&ajaxtarget=fwin_content_login"
@@ -28,7 +31,13 @@ get_question_url = "https://www.1point3acres.com/bbs/plugin.php?id=ahome_dayques
 post_answer_url = "https://www.1point3acres.com/bbs/plugin.php?id=ahome_dayquestion:pop"
 
 cookie_jar = None
-scraper = cfscrape.create_scraper()
+
+basic_cookie = get_cf_clearance.get_basic_cookie()
+
+worker = "www.laika42.top"
+# ip = '104.26.8.210'
+ip = '116.234.47.7'
+proxy = CFProxy(worker, user_agent, ip)
 
 
 def save_error(response: requests.Response, error_desc: str = ""):
@@ -49,6 +58,49 @@ def check_status_code(response: requests.Response, error_desc: str = ""):
 	if response.status_code != 200:
 		print(f"{error_desc} error: status code is {response.status_code}")
 		exit(-1)
+
+
+def get_login_info_() -> (str, str):
+	global cookie_jar
+	global proxy
+	header = {
+		"User-Agent": user_agent,
+		"Referer": referer,
+	}
+	# proxy = CFProxy(worker, user_agent, ip)
+	cookie_jar = requests.cookies.RequestsCookieJar()
+	#cookie_jar.update(basic_cookie)
+	response = requests.get("https://www.1point3acres.com/bbs/", headers=header, cookies=cookie_jar)
+	# response = proxy.get("https://www.1point3acres.com/bbs/", headers=header)
+	if (response.status_code == 503):
+		print("stop by cloudflare", response.status_code)
+		exit(-1)
+	if (response.status_code != 200):
+		print("wrong status code: ", response.status_code)
+		exit(-1)
+	cookie_jar.update(response.cookies)
+
+	login_hash = ""
+	form_hash = ""
+	response = requests.get(get_login_url, headers=header, cookies=cookie_jar)
+	# response = proxy.get(get_login_url, headers=header, cookies=cookie_jar)
+	cookie_jar.update(response.cookies)
+	check_status_code(response, "get login info")
+	pattern = re.compile("loginhash=([0-9a-zA-Z]+)")
+	login_hashes = pattern.findall(response.text)
+	if len(login_hashes) >= 1:
+		login_hash = login_hashes[0]
+	else:
+		save_error(response, "login hash not found")
+		exit(-1)
+	pattern = re.compile('input type="hidden" name="formhash" value="([0-9a-zA-Z]+)"')
+	form_hashes = pattern.findall(response.text)
+	if len(form_hashes) >= 1:
+		form_hash = form_hashes[0]
+	else:
+		save_error(response, "sec hash not found")
+		exit(-1)
+	return form_hash, login_hash
 
 
 def login(username: str, password_hashed: str, form_hash: str, login_hash: str) -> bool:
@@ -76,7 +128,8 @@ def login(username: str, password_hashed: str, form_hash: str, login_hash: str) 
 		"answer": "",
 	}
 	url = login_url_v3 % login_hash
-	response = scraper.post(url, headers=header, cookies=cookie_jar, data=urllib.parse.urlencode(body))
+	response = requests.post(url, headers=header, cookies=cookie_jar, data=urllib.parse.urlencode(body))
+	# response = proxy.post(url, headers=header, cookies=cookie_jar, data=urllib.parse.urlencode(body))
 
 	cookie_jar.update(response.cookies)
 	check_status_code(response, "log in")
@@ -87,44 +140,6 @@ def login(username: str, password_hashed: str, form_hash: str, login_hash: str) 
 	return True
 
 
-def get_login_info_() -> (str, str):
-	global cookie_jar
-	header = {
-		"User-Agent": user_agent,
-		"Referer": referer
-	}
-	scraper = cfscrape.create_scraper()
-	response = requests.get("https://www.1point3acres.com/bbs/",headers=header)
-	if response.status_code==503:
-		pass
-	if (response.status_code != 200):
-		print("stop by cloudflare")
-		exit(-1)
-	cookie_jar = response.cookies
-
-	login_hash = ""
-	form_hash = ""
-	response = requests.get(get_login_url, headers=header, cookies=cookie_jar)
-	#response = scraper.get(get_login_url, headers=header, cookies=cookie_jar)
-	cookie_jar.update(response.cookies)
-	check_status_code(response, "get login info")
-	pattern = re.compile("loginhash=([0-9a-zA-Z]+)")
-	login_hashes = pattern.findall(response.text)
-	if len(login_hashes) >= 1:
-		login_hash = login_hashes[0]
-	else:
-		save_error(response, "login hash not found")
-		exit(-1)
-	pattern = re.compile('input type="hidden" name="formhash" value="([0-9a-zA-Z]+)"')
-	form_hashes = pattern.findall(response.text)
-	if len(form_hashes) >= 1:
-		form_hash = form_hashes[0]
-	else:
-		save_error(response, "sec hash not found")
-		exit(-1)
-	return form_hash, login_hash
-
-
 def get_checkin_info_() -> (str, str):
 	global cookie_jar
 	form_hash = ""
@@ -133,8 +148,8 @@ def get_checkin_info_() -> (str, str):
 		"User-Agent": user_agent,
 		"Referer": referer
 	}
-	# response = requests.get(get_checkin_url, headers=header, cookies=cookie_jar)
-	response = scraper.get(get_checkin_url, headers=header, cookies=cookie_jar)
+	response = requests.get(get_checkin_url, headers=header, cookies=cookie_jar)
+	# response = proxy.get(get_checkin_url, headers=header, cookies=cookie_jar)
 	cookie_jar.update(response.cookies)
 	check_status_code(response, "get checkin info")
 	if "您今天已经签到过了或者签到时间还未开始" in response.text:
@@ -168,8 +183,8 @@ def get_verify_code_(id_hash) -> str:
 		"Referer": referer
 	}
 	# print(cookie_jar)
-	# response = requests.get(get_verify_code_url % (id_hash, id_hash), headers=header, cookies=cookie_jar)
-	response = scraper.get(get_verify_code_url % (id_hash, id_hash), headers=header, cookies=cookie_jar)
+	response = requests.get(get_verify_code_url % (id_hash, id_hash), headers=header, cookies=cookie_jar)
+	# response = proxy.get(get_verify_code_url % (id_hash, id_hash), headers=header, cookies=cookie_jar)
 	cookie_jar.update(response.cookies)
 	check_status_code(response, "get verify code phase 1 error")
 	# misc.php?mod = seccode & update = 86288 & idhash = S0
@@ -182,8 +197,8 @@ def get_verify_code_(id_hash) -> str:
 		print("response 中没有 验证码 的 url")
 		print(response.text)
 		exit(-1)
-	#response = requests.get(verify_code_url, headers=header, cookies=cookie_jar)
-	response = scraper.get(verify_code_url, headers=header, cookies=cookie_jar)
+	response = requests.get(verify_code_url, headers=header, cookies=cookie_jar)
+	# response = proxy.get(verify_code_url, headers=header, cookies=cookie_jar)
 	cookie_jar.update(response.cookies)
 	check_status_code(response, "get verify code phase 2 error")
 	# print(len(response.content)) # 文件大小
@@ -207,8 +222,8 @@ def check_verify_code_(id_hash, code):
 		# "Referer": "https://www.1point3acres.com/bbs/dsu_paulsign-sign.html"
 		"Referer": referer
 	}
-	#response = requests.get(check_verify_code_url % (id_hash, code), headers=header, cookies=cookie_jar)
-	response = scraper.get(check_verify_code_url % (id_hash, code), headers=header, cookies=cookie_jar)
+	response = requests.get(check_verify_code_url % (id_hash, code), headers=header, cookies=cookie_jar)
+	# response = proxy.get(check_verify_code_url % (id_hash, code), headers=header, cookies=cookie_jar)
 	cookie_jar.update(response.cookies)
 	check_status_code(response, "check verify code phase 1 error")
 	if "succeed" in response.text:
@@ -239,8 +254,8 @@ def do_daily_checkin_(verify_code: str, form_hash: str, sec_hash: str = "S00") -
 		"seccodeverify": verify_code
 	}
 
-	#response = requests.post(post_checkin_url, headers=header, data=body, cookies=cookie_jar)
-	response = scraper.post(post_checkin_url, headers=header, data=body, cookies=cookie_jar)
+	response = requests.post(post_checkin_url, headers=header, data=body, cookies=cookie_jar)
+	# response = proxy.post(post_checkin_url, headers=header, data=body, cookies=cookie_jar)
 	check_status_code(response, "daily checkin")
 	if "您需要先登录才能继续本操作" in response.text:  # cookie 出错
 		print("login error，cookie missing")
@@ -270,8 +285,8 @@ def get_daily_task_answer() -> (str, str, str):
 		"User-Agent": user_agent,
 		"Referer": referer
 	}
-	#response = requests.get(get_question_url, headers=header, cookies=cookie_jar)
-	response = scraper.get(get_question_url, headers=header, cookies=cookie_jar)
+	response = requests.get(get_question_url, headers=header, cookies=cookie_jar)
+	# response = proxy.get(get_question_url, headers=header, cookies=cookie_jar)
 	check_status_code(response, "get daily question")
 	if "您今天已经参加过答题，明天再来吧！" in response.text:
 		print("已答题")
@@ -335,8 +350,8 @@ def do_daily_question_(answer: str, verify_code: str, form_hash: str, sec_hash: 
 	}
 	# 网站的原版请求是 multipart/form-data ，但是我发现用 application/x-www-form-urlencoded 也是可以的
 	# response = scraper.post(post_answer_url, files=body, headers=header, cookies=cookie_jar)
-	#response = requests.post(post_answer_url, data=body, headers=header, cookies=cookie_jar)
-	response = scraper.post(post_answer_url, data=body, headers=header, cookies=cookie_jar)
+	response = requests.post(post_answer_url, data=body, headers=header, cookies=cookie_jar)
+	# response = proxy.post(post_answer_url, data=body, headers=header, cookies=cookie_jar)
 	check_status_code(response, "post answer")
 	if "抱歉，您的请求来路不正确或表单验证串不符，无法提交" in response.text:
 		print("抱歉，您的请求来路不正确或表单验证串不符，无法提交")
