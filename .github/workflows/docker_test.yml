@@ -1,4 +1,4 @@
-name: 'test'
+name: '(! test only) docker test'
 
 on:
   workflow_dispatch:
